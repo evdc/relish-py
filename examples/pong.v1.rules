@@ -1,0 +1,129 @@
+// experimental Pong implementation
+
+let SCREEN_WIDTH = 1000;
+let SCREEN_HEIGHT = 1000;
+
+type Point {
+    x: 0 .. SCREEN_WIDTH
+    y: 0 .. SCREEN_HEIGHT
+}
+
+type Physical {
+    position: Point,
+    velocity: Point
+}
+
+type Paddle : Physical {
+    width: Int
+    height: Int
+}
+
+type Ball : Physical {
+    radius: Int
+}
+
+let the_ball = create Ball
+let player1 = create Paddle
+let player2 = create Paddle
+let player1_score = 0
+let player2_score = 0
+do Reset!
+
+rule point_inside(p: Point, paddle: Paddle) = true if {
+    p.x >= paddle.position.x,
+    p.x <= paddle.position.x + paddle.width,
+    p.y >= paddle.position.y,
+    p.y <= paddle.position.y + paddle.height
+}
+
+// multiple dispatch!
+rule point_inside(p: Point, ball: Ball) = true if {
+    euclidean_dist(p, ball.position) <= ball.radius
+}
+
+rule collides(ball: Ball, paddle: Paddle) = true if {
+    // Is there some point inside both ball and paddle - do they overlap?
+    // Looping over all 1M points and testing collision is a terribly inefficient way to perform collision detection
+    // Faster would be - intersect the set of point_inside(p, b) and point_inside(p, paddle)
+    exists p : Point where point_inside(p, ball) and point_inside(p, paddle)
+}
+
+// This rule is checked when its dependencies (point_inside) and their dependencies (ball.position, paddle.position)
+// are updated -- that is, every physics frame, after position/velocity integrated
+when collides(the_ball, p: Paddle) {
+    the_ball.velocity.x *= -1
+    the_ball.velocity *= (1.1, 1.1)
+}
+
+// Off the left side
+// Checked when dependencies (the_ball.position) change, so again, each physics frame
+when (the_ball.position.x - the_ball.radius <= 0) {
+    player2_score += 1
+    do Reset
+}
+when (the_ball.position.x + the_ball.radius >= SCREEN_WIDTH) {
+    player1_score += 1
+    do Reset
+}
+
+when Reset {
+    the_ball.position = Point(SCREEN_WIDTH/2, SCREEN_HEIGHT/2)
+    the_ball.velocity = (random.choice(-1 | 1), random.choice(-1 | 1))
+    // ... set paddle positions ...
+}
+
+// This event is fired by the engine every physics frame, unsurprisingly.
+when eng.PhysicsFrame {
+    for p : Physical do p.position += p.velocity
+    // alt: Physical do .position += .velocity
+}
+
+// for all paddles, require these constraints are met
+// if an update to p.position would violate these constraints, that update will be ignored
+// Pretty experimental, have to figure out if this is generally viable
+// requires registering this check to fire before any update to `Paddle.position`
+rule PaddlesStayOnScreen(p: Paddle) {
+    require p.position.y >= 0 and p.position.y <= SCREEN_HEIGHT - 50
+}
+
+// the semantics of consistency rules are tricky to define.
+// they seem to want some way of denoting "before an update which would cause this condition"
+// and "after an update which causes this condition", at a minimum, and probably others.
+// Dedalus gives you the tools to do this, of course, but maybe you want something lighter weight.
+when for p : Paddle {
+    p.position.y < 0 or p.position.y > SCREEN_HEIGHT - 50
+} @before do { ignore };
+
+// I feel like this is reasonably readable?
+// It requires inversion, from "here is the invariant" to "here's an event that breaks the invariant"
+when @before-update for p: Paddle where {
+    p.position.y @new < 0 or p.position.y @new > SCREEN_HEIGHT - 50
+} do { ignore };
+
+``` this is block comment syntax now
+the normal evaluation order would be something like:
+- the engine fires a PhysicsFrame event
+- the `when PhysicsFrame` block catches it
+    - for each entity id in the set Physical, lookup that entity id in `position` and `velocity`
+    - update `position` -- invoke its update method, or call `runtime.update_relation(position, entity_id, new_val)`
+    - generates the internal UpdateRelation("position", entity_id, new_val) event?
+- One way or another, this will iter over everything that depends on position, *after* the update is committed
+    - the `Collision` rule depends on position, so it will be checked for the_ball against each paddle
+    - the offside/scoring rule(s) depend on position (of the ball), so they will be checked
+        - technically, these don't just depend on the `position` relation, but on the value of that relation for one specific entity in it (the ball)
+          
+```
+
+when eng.inputs.KeyDown(eng.inputs.keys.ARROW_DOWN) {
+    player1.velocity = (0, -1)
+}
+when eng.inputs.KeyDown(eng.inputs.keys.ARROW_UP) {
+    player1.velocty = (0, 1)
+}
+when eng.inputs.KeyUp(eng.inputs.keys.ARROW_DOWN | eng.inputs.keys.ARROW_UP) {
+    player1.velocity = (0, 0)
+}
+
+when eng.RenderFrame {
+    // ... draw paddles, ball, score text ...
+}

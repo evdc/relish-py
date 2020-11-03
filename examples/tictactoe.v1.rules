@@ -1,0 +1,91 @@
+// low-level / unsugared version
+// We assume tuples are a native, value type
+
+// Define a set of cell values
+entity Blank, X, O;
+rule Mark(_) = false;
+Mark(x) = true if x == Blank | x == X | x == O;
+
+rule Side(_) = false;
+Side(x) = true if x == X or x == O;
+
+// Define a board
+rule CellPos(_) = false;
+CellPos(x, y) = true if {
+    (x == 0 | x == 1 | x == 2) and
+    (y == 0 | y == 1 | y == 2)
+}
+
+// Initially all valid positions are blank
+rule CellValue(x, y) = Blank if CellPos(x, y);
+// Constraint: the CellValue rule always produces a Mark
+CellValue :: Mark;
+
+// Define equations for lines
+rule HorizontalLine(p1, p2, p3) = false;
+HorizontalLine(p1, p2, p3) = true if {
+    p1[0] == p2[0] and p2[0] == p3[0]       // same x
+}
+rule VerticalLine(p1, p2, p3) = false;
+VerticalLine(p1, p2, p3) = true if {
+    p1[1] == p2[1] and p2[1] == p3[1]       // same y
+}
+rule UpDiagonalLine(p1, p2, p3) = false;
+UpDiagonalLine(p1, p2, p3) = true if {
+    p2[0] == p1[0] + 1 and p2[1] == p1[1] + 1 and
+    p3[0] == p2[0] + 1 and p3[1] == p2[1] + 1
+}
+rule DownDiagonalLine(p1, p2, p3) = false;
+DownDiagonalLine(p1, p2, p3) = true if {
+    p2[0] == p1[0] - 1 and p2[1] == p1[1] - 1 and
+    p3[0] == p2[0] - 1 and p3[1] == p2[1] - 1
+}
+
+// A side has won if there exist 3 points of that
+rule Win(side) = false;
+Win(side) = true if {
+    let p1, p2, p3 :: CellPos and              // Introduce 3 temp variables which range over the CellPos set. `let` is an expr and resolves to true so you can chain it in this `and`
+    CellValue(p1[0], p1[1]) == side and
+    CellValue(p2[0], p2[1]) == side and
+    CellValue(p3[0], p3[1]) == side and
+    (HorizontalLine(p1, p2, p3) or VerticalLine(p1, p2, p3) or UpDiagonalLine(p1, p2, p3) or DownDiagonalLine(p1, p2, p3)
+}
+
+// Actions
+when Turn(side) do {
+    // Procedural sub-language, valid only in action blocks
+    let move = stdio.input("Player ${side} -- enter x,y: ")
+    let (x, y) = move.strip().split(",");
+    x = int(x);
+    y = int(y);
+
+    stdio.print("Invalid move") if not CellPos(x, y);
+    CellValue(x, y) := side;                        // State update -- updates a value of this rule
+    if side == X do Turn(O) else do Turn(X);        // (tail) recursive event invocation, to continue game loop
+}
+
+// This gets automatically checked, since it was previously declared as a rule
+// when the Win rule (initially False for all sides) becomes true, this event fires
+when Win(side) == true do {
+    stdio.print("Player ${side} wins!");
+    sys.exit();
+}
+
+// Drawing
+rule RenderCell(val) = ' ' if val == Blank;
+RenderCell(val) = 'X' if val == X;
+RenderCell(val) = 'O' if val == O;
+
+when Render do {
+    stdio.print("|---|---|---|")
+    stdio.print("| {} | {} | {} |".format(RenderCell(CellValue(0, 0)), CellValue(1, 0), CellValue(2, 0)))
+    stdio.print("| {} | {} | {} |".format(CellValue(0, 1), CellValue(1, 1), CellValue(2, 1)))
+    stdio.print("| {} | {} | {} |".format(CellValue(0, 2), CellValue(1, 2), CellValue(2, 2)))
+    stdio.print("|---|---|---|")
+}
+when change(CellValue) do Render;       // annotating dependency explicitly, instead of tracking it
+
+// Entry point -- this event is fired at program startup
+when Main do {
+    do Turn(X);
+}

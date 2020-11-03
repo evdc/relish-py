@@ -1,0 +1,99 @@
+// Slightly higher level / sugared
+
+// Define a set of cell values
+type Mark = Blank | X | O;
+type Side :: Mark = X | O;
+
+// Define a board (with a range expr)
+type ValidCellPos = (0, 0) .. (2, 2);
+// Alternately, if that's too hard to implement
+type ValidCellPos = (0 .. 2) & (0 .. 2);        // cross product / join.
+
+// Internally, materializing this creates a set of tuples from (0, 0) to (2, 2) and their corresponding values
+state CellValue(x: int, y: int): Mark = Blank if ValidCellPos(x, y);
+
+// Define equations for lines
+rule HorizontalLine(p1, p2, p3) = true if {
+    p1[0] == p2[0] and p2[0] == p3[0]       // same x
+}
+rule VerticalLine(p1, p2, p3) = true if {
+    p1[1] == p2[1] and p2[1] == p3[1]       // same y
+}
+rule UpDiagonalLine(p1, p2, p3) = true if {
+    p2[0] == p1[0] + 1 and p2[1] == p1[1] + 1,
+    p3[0] == p2[0] + 1 and p3[1] == p2[1] + 1
+}
+rule DownDiagonalLine(p1, p2, p3) = true if {
+    p2[0] == p1[0] - 1 and p2[1] == p1[1] - 1,
+    p3[0] == p2[0] - 1 and p3[1] == p2[1] - 1
+}
+
+// A side has won if there exist 3 points of that
+rule Win(side: Side) = true if {
+    let p1, p2, p3 : ValidCellPos,             // Introduce 3 temp variables which range over the CellPos set. `let` is an expr and resolves to true so you can chain it in this `and`
+    CellValue(p1[0], p1[1]) == side,
+    CellValue(p2[0], p2[1]) == side,
+    CellValue(p3[0], p3[1]) == side,
+    (HorizontalLine(p1, p2, p3) or VerticalLine(p1, p2, p3) or UpDiagonalLine(p1, p2, p3) or DownDiagonalLine(p1, p2, p3)
+}
+
+// the type of `move` is "update to CellValue"
+// A move causes a win if there exist two other cells of the same side in a line w/ it
+rule MoveCausesWin(move: ~CellValue, side: Side) = true if {
+    let p1, move_side = move,       // destructuring
+    move_side == side,
+    let p2, p3 : ValidCellPos,
+    CellValue[p2] == side,
+    CellValue[p3] == side,
+    (HorizontalLine(p1, p2, p3) or VerticalLine(p1, p2, p3) or UpDiagonalLine(p1, p2, p3) or DownDiagonalLine(p1, p2, p3)
+}
+when CellValue change(move) check MoveCausesWin(move, *);
+when MoveCausesWin(_, s) do Win(s);
+
+// Actions
+when Turn(side: Side) do {
+    // Procedural sub-language, valid only in action blocks
+    let move = stdio.input("Player ${side} -- enter x,y: ")
+    let (x, y) = move |> strip |> split(",")
+    x = int(x);
+    y = int(y);
+
+    err("Invalid move") if not CellPos(x, y);
+    CellValue(x, y) := side;                        // State update -- updates a value of this rule. todo: check if already present
+    if side == X then do Turn(O) else do Turn(X);        // (tail) recursive event invocation, to continue game loop
+}
+
+// This gets automatically checked, since it was previously declared as a rule
+// when the Win rule (initially False for all sides) becomes true, this event fires
+when Win(side) == true do {
+    stdio.print("Player ${side} wins!");
+    sys.exit();
+}
+
+// Drawing. Note the elided arg name (just the type) and match expr
+rule RenderCell(_: Mark) = {
+    Blank: ' ',
+    X: 'X',
+    O: 'O'
+}
+
+when Render do {
+    stdio.print("|---|---|---|")
+    stdio.print("| {} | {} | {} |".format(RenderCell(CellValue(0, 0)), CellValue(1, 0), CellValue(2, 0)))
+    stdio.print("| {} | {} | {} |".format(CellValue(0, 1), CellValue(1, 1), CellValue(2, 1)))
+    stdio.print("| {} | {} | {} |".format(CellValue(0, 2), CellValue(1, 2), CellValue(2, 2)))
+    stdio.print("|---|---|---|")
+}
+when change(CellValue) do Render;       // annotating dependency explicitly, instead of tracking it
+
+// New addition -- count how many of each mark are on the board
+// to demonstrate aggregation
+rule NumberOfMark(mark: Side) = {
+    let p : ValidCellPos,
+    count(CellValue(p) == mark)                    // cheating -- count is a builtin/primitive aggregation
+}
+
+// Entry point -- this event is fired at program startup
+when Main do {
+    do Turn(X);
+}

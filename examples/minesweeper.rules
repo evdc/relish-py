@@ -1,0 +1,79 @@
+// Minesweeper rules
+
+const WIDTH = 100;
+const HEIGHT = 100;
+const N_MINES = 130;
+
+// An enum, note one variant carries data
+type CellState = NAdjacent(n: Int) | Flag | FlagMine | Hidden | HiddenMine | Exploded
+
+// A range of tuples from (0, 0) to (WIDTH, HEIGHT) expressed as a cross product
+// This produces (the equivalent of) a generator, does not materialize all those tuples
+type CellPos = (0..WIDTH) * (0..HEIGHT)
+
+rule Board(pos) = Hidden if pos : CellPos ! // The ! materializes this set of tuples as a relation
+// Board[_ : CellPos] = Hidden
+
+action Setup {
+    for 0 .. N_MINES do {
+        const x = Math.floor(Math.random() * WIDTH);
+        const y = Math.floor(Math.random() * HEIGHT);
+        Board[(x, y)] := HiddenMine;
+    }
+}
+
+// The return type of this rule (0 or more CellPos) constrains its return values to be members of CellPos,
+// i.e. not go off the grid, this is implicitly checked
+// Note how separating two clauses in the for-expression with a comma does a join, aka cross product, aka nested loop
+rule Neighbors(x, y): CellPos* = {
+    for dx : -1 .. 2,
+        dy : -1 .. 2
+        if dx != 0 and dy != 0
+        do (x + dx, y + dy)
+}
+
+// alt syntax
+// The above is written like a function/expression, which returns a generator or a set;
+// whereas this rule is written like a predicate
+rule Neighbor(x, y): CellPos = (x + dx, y + dy) where {
+    let dx : -1 .. 2,
+    let dy : -1 .. 2,
+    dx != 0 and dy != 0
+}
+
+// If worded this way, we can find all solutions more easily
+// by rewriting each free variable into a loop over the set it ranges over
+rule Neighbor(x, y): CellPos = (x2, y2) where {
+    let dx : -1 .. 2,
+    let dy : -1 .. 2,
+    x2 = x + dx,
+    y2 = y + dy,
+    (x, y) != (x2, y2)
+}
+
+// Another way of writing a predicate:
+rule Adjacent(p1: CellPos, p2: CellPos) = true if {
+    abs(p2.x - p1.x) == 1 or abs(p2.y - p2.y) == 1
+}
+// and then you can write `Adjacent(p1, *)` to ask for all p2 satisfying this predicate given p1.
+// somehow the engine has to know not to try every CellPos, but only those that could match ... not sure how
+// - basically you have to invert the function, or, state your rules as functions in the first place
+
+// Actions can mutate state
+action Detonate(pos) {
+    if Board[pos] == FlagMine | HiddenMine {
+        Board[pos] := Exploded
+        do GameOver
+    }
+
+    let n_neighboring_mines = sum(for n : Neighbors(pos[0], pos[1]) if Board[n] == FlagMine | HiddenMine)
+    Board[pos] := NAdjacent(n_neighboring_mines)
+    if n_neighboring_mines == 0 {
+        for n : Neighbors(pos[0], pos[1]) if Board[n] == Hidden do Detonate(n)
+    }
+}
+
+// This could (maybe) get rewritten to first-order rules like
+// Board(pos) := Exploded if Timestamp(t) and _did_Detonate(pos, t) and Board(pos, t) == FlagMine | HiddenMine
+// note the use of timestamp to constrain "at the time it was detonated, there was a mine"
+// and then "do Detonate(pos)" is rewritten as "_did_Detonate(pos, t)."

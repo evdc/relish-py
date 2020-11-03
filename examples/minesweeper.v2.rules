@@ -1,0 +1,70 @@
+// Minesweeper rules, in ECS fashion
+
+const WIDTH = 100;
+const HEIGHT = 100;
+const N_MINES = 130;
+
+type CellState = NAdjacent(0 .. 8) | Flag | FlagMine | Hidden | HiddenMine | Exploded
+
+// Entity archetype declaration
+type Cell = {
+    pos: (0, 0) .. (WIDTH, HEIGHT)  #index=invert    // specify the set to which pos must belong, as a range of tuples
+    state: CellState
+}
+
+// Allocate entity IDs for each cell value, allocate component storage for Cell.pos and Cell.state
+for p : Cell.pos do
+    create Cell(pos=p, state=Hidden)
+
+for 0 .. N_MINES do
+    let x = Math.floor(Math.random() * WIDTH);
+    let y = Math.floor(Math.random() * HEIGHT);
+    Cell.state[Cell.pos == (x, y)] := HiddenMine;
+    // alt: for Cell where .pos == (x, y) do .state := HiddenMine;
+    // alt alt: Cell[.pos == (x, y)].state := HiddenMine;
+
+    // this will definitely be inefficient if Cell.pos is a typical {entity_id => val} mapping,
+    // since it'd have to do an inverted lookup which only gets 1 hit.
+    // you want to specify that Cell.pos should actually be stored the other way around: {val => entity_id} in this case
+    // really, you don't even need the entity IDs, you could just store a {pos => state} mapping, in this minimal example
+    // presumably in more complex apps though you'd want to get more complex and that wouldn't scale
+
+rule Neighbors(c: Cell) => Cell* {
+    // all Cells where dx is -1 or 1, and/or dy is -1 or 1
+    Cell[
+        .pos.x - c.pos.x : {-1. 1} or
+        .pos.y - c.pos.y : {-1. 1}
+    ]
+}
+
+// another way
+rule Neighbors(c: Cell) => Cell* {
+    let positions = (c.pos + (-1, -1)) .. (c.pos + (1, 1))    // A range of positions (also a set)
+    Cell[for .pos : positions if .pos != c.pos]               // Lookup multiple values in Cell.pos and return corresponding entity IDs
+    // Cell where .pos : positions, .pos != c.pos                Wordy instead of operator notation
+}
+
+
+
+// yet another - join notation
+rule Neighbors(c: Cell) => Cell* {
+    let positions = (c.pos + (-1, -1)) .. (c.pos + (1, 1))
+    Cell.pos <: positions       // "reverse lookup", lookup each of positions on the RHS of Cell.pos and return the corresponding entity ID
+}
+
+action Detonate(c: Cell) {
+    if c.state : FlagMine | HiddenMine {
+        c.state <- Exploded
+        do GameOver
+    }
+
+    let n_neighboring_mines = count(for n : Neighbors(pos[0], pos[1]) if n.state == FlagMine | HiddenMine)
+    // alt: neighboring_mines = Neighbors[c][.state == FlagMine | HiddenMine]
+    // alt: neighboring_mines = Neighbors(c) where .state : FlagMine | HiddenMine
+    // alt alt: neighboring_mines = c :> Neighbors :> state :> FlagMine | HiddenMine
+    c.state := NAdjacent(n_neighboring_mines)
+    if n_neighboring_mines == 0 {
+        for n : Neighbors(pos[0], pos[1]) if n.state == Hidden do Detonate(n)
+        // Neighbors(c) where .state == Hidden do Detonate(.)
+    }
+}

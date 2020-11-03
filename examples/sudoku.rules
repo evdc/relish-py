@@ -1,0 +1,105 @@
+entity Blank
+const type Digit = 1 .. 10    // 1 thru 9, the upper end is exclusive
+const type Cell = (0, 0) .. (10, 10)
+const type Row = 0 .. 9
+const type Col = 0 .. 9
+const type Box = 0 .. 9
+
+// boxes go from 0 at top left, 2 at top right, ... 8 at bottom right
+func cell_in_box(cell: Cell) -> Box = {
+    let bx = mod(cell[0], 3)
+    let by = mod(cell[1], 3)
+    return by * 3 + bx
+}
+
+// this requirement is implied by the types above
+// but involves testing each element of cell, so you probably won't do it at compile time?
+rule every_cell_in_box = forall c: Cell require cell_in_box(cell) : Box
+
+// is it possible to place `digit` at `cell`?
+rule possible(cell: Cell, digit: Digit) -> bool = {
+    let box = cell_in_box(cell),
+    let row = cell[0],
+    let col = cell[1],
+    not exists c : Cell where
+        (cell_in_box(c) == box or c[0] == row or c[1] == col),
+        Board(c, digit)
+}
+
+// At load time, materialize the board and set each entry to blank
+relation Board(cell: Cell, value: Digit | Blank) #materialize=map
+
+// A cell can only have one value. This could also be a cardinality constraint on Board definition
+rule each_cell_has_one_value {
+    forall c : Cell, a: Digit, b: Digit require {
+        Board(c, a) and Board(c, b) => a == b       // => is material implication
+    }
+}
+// alternatively
+rule each_cell_has_one_value {
+    not exists c: Cell, a: Digit, b: Digit where Board(c, a) and Board(c, b) and a != b
+}
+// either of these are checked on modification to Cell, Digit and Board
+// but Cell and Digit are const, so that helps
+
+when Setup {
+    for c : Cell do Board <- (c, Blank)
+}
+
+// timeless rule, but we don't have a good way to specify what happens when we violate it
+rule only_allow_possible =
+    forall cell, digit : Board require possible(cell, digit)
+when RuleViolated(only_allow_possible, update) {
+    let cell, digit = update
+    print("Cannot place #{digit} at #{cell}")
+    rollback update
+}
+
+// event-driven version of the above
+// "before inserting or updating a (cell, digit) pair in Board, if this condition doesn't hold, don't do it"
+rule disallow_impossible_placement {
+    when @before Board(cell, digit)
+        where not possible(cell, digit) do {
+            print("Cannot place #{digit} at #{cell}")
+            abort 1;        // aborts 1 level of
+        }
+}
+
+
+rule won -> bool =
+    not exists c : Cell where
+        Board(cell, Blank)
+
+// fires when this rule becomes true
+when won {
+    print("You won!")
+    sys.exit()
+}
+
+
+
+// ... stuff to get input, make (propose) updates to Board, render, ...
+when Turn {
+    print("Enter a move as row,col,value: ")
+    let move = stdio.readline()
+    let row, col, val = move -> String.strip -> String.split(",") -*> parseInt
+    do Board <- Cell(row, col), val     // another syntax for an update?? remember, this triggers consistency pre-checks and dependent post-checks
+    do Turn
+}
+
+// ---
+// try searching for solutions
+
+func n_possibilities(cell) = count(d: Digit where possible(cell, d))   // count how many entries are in `possible` for this cell for all digits
+// also: possible(cell, *) maybe
+
+func find_solutions {
+    // simple heuristic: start trying stuff at the cell with fewest possibilities
+    let start_at_cell = min(for c: Cell do n_possibilities(c))    // this syntax is not solid yet or anything. maybe even just `min(n_possibilities)`
+    // or, using rel syntax, n_possibilities[_, min(*)]           // select val from first col, corresponding to min of the second col
+
+    // select a random possibility for this cell, set it, and then try to find a solution with the new board
+    // requires the ability to backtrack if this doesn't work
+    choose n : Digit where possible(start_at_cell, n)
+    Board[start_at_cell] = n
+}
